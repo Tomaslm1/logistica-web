@@ -27,9 +27,14 @@ except Exception:
 with st.sidebar:
     st.header("🔒 Acceso")
     pwd = st.text_input("Contraseña", type="password")
-    if pwd != "Timo2026":
+    
+    # Extraemos la contraseña de la caja fuerte virtual
+    CLAVE_SECRETA = st.secrets["APP_PASSWORD"]
+    
+    if pwd != CLAVE_SECRETA:
         st.warning("Ingresa la clave para activar.")
         st.stop()
+
     
     st.divider()
     st.header("📍 Puntos Base")
