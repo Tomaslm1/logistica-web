@@ -4,7 +4,7 @@ import googlemaps
 from datetime import datetime
 import io
 import urllib.parse
-import uuid  # NUEVO: Para crear IDs únicos y evitar que los textos se mezclen
+import uuid
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
 from reportlab.lib.pagesizes import letter
@@ -14,7 +14,7 @@ from reportlab.lib import colors
 # ==========================================
 # 1. CONFIGURACIÓN Y SEGURIDAD
 # ==========================================
-st.set_page_config(page_title="Sistema Logístico", layout="wide")
+st.set_page_config(page_title="Sistema Logístico Universal", layout="wide")
 
 try:
     API_KEY = st.secrets["GOOGLE_API_KEY"]
@@ -29,12 +29,14 @@ with st.sidebar:
     pwd = st.text_input("Contraseña", type="password")
     
     # Extraemos la contraseña de la caja fuerte virtual
-    CLAVE_SECRETA = st.secrets["APP_PASSWORD"]
-    
+    try:
+        CLAVE_SECRETA = st.secrets["APP_PASSWORD"]
+    except:
+        CLAVE_SECRETA = "Timo2026" # Clave de respaldo si olvidas configurarla en la nube
+        
     if pwd != CLAVE_SECRETA:
         st.warning("Ingresa la clave para activar.")
         st.stop()
-
     
     st.divider()
     st.header("📍 Puntos Base")
@@ -42,7 +44,7 @@ with st.sidebar:
     dir_fin = st.text_input("Término", "Av. Grecia 3401, Peñalolén")
 
 # ==========================================
-# 2. FUNCIONES DE INGENIERÍA (PORTADAS 1:1)
+# 2. FUNCIONES DE INGENIERÍA
 # ==========================================
 def leer_excel_robusto(archivo):
     df_crudo = pd.read_excel(archivo, header=None)
@@ -59,19 +61,15 @@ def leer_excel_robusto(archivo):
 
 def limpiar_dato(valor):
     if pd.isna(valor): return None
-    # EL ESCUDO ANTI-DECIMALES: Si es un número, le quita el .0 antes de hacerlo texto
+    # Anti-decimales (convierte 569...0 a un número entero limpio)
     if isinstance(valor, (int, float)):
         return str(int(valor)) if valor == int(valor) else str(valor)
     texto = str(valor).strip()
     return None if texto.lower() in ["nan", "", "none"] else texto
 
 def formatear_telefono(numero):
-    """Convierte cualquier número desordenado en un formato limpio y profesional"""
     if not numero: return None
-    # Quitamos espacios, guiones o cualquier texto, dejando solo números
     num = "".join(c for c in str(numero) if c.isdigit())
-    
-    # Formateo visual (Ajustado para Chile)
     if len(num) == 11 and num.startswith("56"): 
         return f"+{num[:2]} {num[2]} {num[3:7]} {num[7:]}"
     elif len(num) == 8: 
@@ -79,6 +77,7 @@ def formatear_telefono(numero):
     elif len(num) == 9 and num.startswith("9"): 
         return f"+56 {num[:1]} {num[1:5]} {num[5:]}"
     return f"+{num}" if num else None
+
 def validar_direccion(entrada):
     try:
         res = gmaps.geocode(f"{entrada}, Santiago, Chile")
@@ -114,15 +113,22 @@ def optimizar_con_ortools(matriz):
     params = pywrapcp.DefaultRoutingSearchParameters()
     params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
     solucion = routing.SolveWithParameters(params)
+    
     if solucion:
-        ruta = []
+        ruta, t_total = [], 0
         idx = routing.Start(0)
         while not routing.IsEnd(idx):
             ruta.append(manager.IndexToNode(idx))
+            ant = idx
             idx = solucion.Value(routing.NextVar(idx))
+            t_total += routing.GetArcCostForVehicle(ant, idx, 0)
         ruta.append(manager.IndexToNode(idx))
-        return ruta
-    return None
+        return ruta, t_total
+    return None, 0
+
+def formatear_tiempo(segundos):
+    horas, minutos = segundos // 3600, (segundos % 3600) // 60
+    return f"{horas}h {minutos}m" if horas > 0 else f"{minutos}m"
 
 # ==========================================
 # 3. GENERACIÓN DE PDF Y URLs
@@ -148,12 +154,9 @@ def generar_pdf_original(ruta, todas_dir, todos_nom, pedidos):
         y -= 15
         
         c.setFont("Helvetica", 10)
-        
-        # --- SOLUCIÓN: Agregamos el Depto a la dirección del PDF ---
         direccion_str = todas_dir[idx]
         if p.get('depto'): 
             direccion_str += f" (Depto: {p['depto']})"
-            
         c.drawString(70, y, f"Dirección: {direccion_str}")
         y -= 12
         
@@ -164,7 +167,7 @@ def generar_pdf_original(ruta, todas_dir, todos_nom, pedidos):
             c.setFont("Helvetica-BoldOblique", 10); c.setFillColor(colors.darkgreen)
             c.drawString(70, y, "PRODUCTOS: " + " | ".join(items)); c.setFillColor(colors.black); y -= 15
             
-        if p.get('efectivo') and str(p['efectivo']).lower() in ['si', 'sí', '1', 'true', 'efectivo']:
+        if p.get('efectivo') and str(p['efectivo']).lower() in ['si', 'sí', '1', 'true', 'efectivo', 'pago efectivo']:
             c.setFont("Helvetica-Bold", 10); c.setFillColor(colors.red)
             c.drawString(70, y, "⚠️ COBRAR EN EFECTIVO"); c.setFillColor(colors.black); y -= 15
             
@@ -181,33 +184,31 @@ def generar_url_maps(tramo_indices, todas_dir):
 # ==========================================
 # 4. INTERFAZ WEB Y FLUJO DE VALIDACIÓN
 # ==========================================
-st.title("🚚 Sistema Logístico")
+st.title("🚚 Sistema Logístico Pro (Web)")
 
 archivo = st.file_uploader("Sube tu Excel", type=["xlsx"])
 
 if archivo:
-        df = leer_excel_robusto(archivo)
-        cols_ex = ["-- No aplica --"] + list(df.columns)
-        
-        # --- EL CEREBRO PREDICTIVO DE COLUMNAS ---
-        def adivinar_indice(opciones, palabras):
-            for i, opc in enumerate(opciones):
-                # Si alguna de las palabras clave está en el nombre de la columna (en minúsculas), devuelve su posición
-                if any(p in str(opc).lower() for p in palabras):
-                    return i
-            return 0 # Si no encuentra nada, devuelve 0 ("-- No aplica --")
+    df = leer_excel_robusto(archivo)
+    cols_ex = ["-- No aplica --"] + list(df.columns)
+    
+    def adivinar_indice(opciones, palabras):
+        for i, opc in enumerate(opciones):
+            if any(p in str(opc).lower() for p in palabras):
+                return i
+        return 0
 
-        st.subheader("🔗 Configuración de Columnas")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            m_dir = st.selectbox("Dirección *", cols_ex, index=adivinar_indice(cols_ex, ["direcc", "calle"]))
-            m_nom = st.selectbox("Nombre Cliente", cols_ex, index=adivinar_indice(cols_ex, ["nombre", "cliente"]))
-        with c2:
-            m_com = st.selectbox("Comuna *", cols_ex, index=adivinar_indice(cols_ex, ["comuna", "ciudad", "sector"]))
-            m_cont = st.selectbox("Teléfono", cols_ex, index=adivinar_indice(cols_ex, ["fono", "tel", "contac"]))
-        with c3:
-            m_depto = st.selectbox("Depto/Casa", cols_ex, index=adivinar_indice(cols_ex, ["depto", "dpto", "casa", "num"]))
-            m_efec = st.selectbox("Pago Efectivo", cols_ex, index=adivinar_indice(cols_ex, ["pago", "efectivo", "cobro", "observ"]))
+    st.subheader("🔗 Configuración de Columnas")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        m_dir = st.selectbox("Dirección *", cols_ex, index=adivinar_indice(cols_ex, ["direcc", "calle"]))
+        m_nom = st.selectbox("Nombre Cliente", cols_ex, index=adivinar_indice(cols_ex, ["nombre", "cliente"]))
+    with c2:
+        m_com = st.selectbox("Comuna *", cols_ex, index=adivinar_indice(cols_ex, ["comuna", "ciudad", "sector"]))
+        m_cont = st.selectbox("Teléfono", cols_ex, index=adivinar_indice(cols_ex, ["fono", "tel", "contac"]))
+    with c3:
+        m_depto = st.selectbox("Depto/Casa", cols_ex, index=adivinar_indice(cols_ex, ["depto", "dpto", "casa", "num"]))
+        m_efec = st.selectbox("Pago Efectivo", cols_ex, index=adivinar_indice(cols_ex, ["pago", "efectivo", "cobro", "observ"]))
 
     if 'campos' not in st.session_state: st.session_state.campos = []
     if st.button("+ Agregar Producto"): st.session_state.campos.append(len(st.session_state.campos))
@@ -243,7 +244,7 @@ if archivo:
                     if v and str(v) not in ["0", "0.0", "0,0"]: prods[p['n']] = v
 
                 datos_cliente = {
-                    'id': str(uuid.uuid4()),  # <--- ESTO SOLUCIONA EL BUG DE LAS CAJAS DE TEXTO
+                    'id': str(uuid.uuid4()),
                     'nombre': str(nom_c) if nom_c else "Cliente",
                     'dir_original': full_dir,
                     'dir_validada': validada,
@@ -258,24 +259,19 @@ if archivo:
                 else:
                     st.session_state.errores.append(datos_cliente)
 
-    # --- PANTALLA DE CORRECCIÓN (SABUESO ANTI-BUGS) ---
     if 'errores' in st.session_state and st.session_state.errores:
         st.error(f"⚠️ Se encontraron {len(st.session_state.errores)} direcciones dudosas. Por favor, corrígelas:")
-        
-        # Usamos una copia de la lista para iterar seguros
         for err in list(st.session_state.errores):
             cols_err = st.columns([4, 1])
             with cols_err[0]:
-                # Usamos el ID único de este error específico para la llave, así Streamlit nunca los mezcla
                 new_val = st.text_input(f"Corregir para: {err['nombre']}", value=err['dir_original'], key=f"input_{err['id']}")
             with cols_err[1]:
-                st.write("") # Espacio para alinear el botón
+                st.write("")
                 st.write("")
                 if st.button("Validar", key=f"btn_{err['id']}"):
                     v, exact = validar_direccion(new_val)
                     if v and exact:
                         err['dir_validada'] = v
-                        # Encontramos el error en la lista original y lo sacamos
                         idx = next((index for (index, d) in enumerate(st.session_state.errores) if d["id"] == err["id"]), None)
                         if idx is not None:
                             st.session_state.listos.append(err)
@@ -303,11 +299,11 @@ if archivo:
                 matriz = obtener_matriz_tiempos_completa(todas_dir)
                 
                 if matriz:
-                    ruta = optimizar_con_ortools(matriz)
+                    ruta, segundos_totales = optimizar_con_ortools(matriz)
                     
                     if ruta:
-                        st.success("¡Ruta calculada con éxito!")
-                        # GLOBOS ELIMINADOS
+                        tiempo_texto = formatear_tiempo(segundos_totales)
+                        st.success(f"¡Ruta calculada con éxito! ⏱️ Tiempo estimado al volante: {tiempo_texto}")
                         
                         pdf_file = generar_pdf_original(ruta, todas_dir, todos_nom, pedidos_full)
                         st.download_button("📄 Descargar Hoja de Ruta (PDF)", pdf_file, "Hoja_Ruta.pdf", "application/pdf")
@@ -335,7 +331,7 @@ if archivo:
                                     st.markdown("📦 **Productos a entregar:**")
                                     for k, v in info['productos'].items():
                                         st.success(f"{v} {k}")
-                                if info.get('efectivo') and str(info['efectivo']).lower() in ['si', 'sí', '1', 'true', 'efectivo']:
+                                if info.get('efectivo') and str(info['efectivo']).lower() in ['si', 'sí', '1', 'true', 'efectivo', 'pago efectivo']:
                                     st.error("⚠️ PAGO EN EFECTIVO PENDIENTE")
                 else:
                     st.error("❌ Error al contactar con Google Maps (Distance Matrix).")
