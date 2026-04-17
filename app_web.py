@@ -18,7 +18,7 @@ st.set_page_config(page_title="Sistema Logístico Universal", layout="wide")
 try:
     API_KEY = st.secrets["GOOGLE_API_KEY"]
     gmaps = googlemaps.Client(key=API_KEY)
-except:
+except Exception:
     st.error("⚠️ Error: Configura 'GOOGLE_API_KEY' en los Secrets de Streamlit.")
     st.stop()
 
@@ -38,16 +38,10 @@ with st.sidebar:
 # ==========================================
 # 2. FUNCIONES DE INGENIERÍA (PORTADAS 1:1)
 # ==========================================
-
-def generar_url_maps(tramo_indices, todas_dir):
-    base_url = "https://www.google.com/maps/dir/"
-    puntos = [urllib.parse.quote(todas_dir[idx]) for idx in tramo_indices]
-    return base_url + "/".join(puntos)
-
 def leer_excel_robusto(archivo):
     df_crudo = pd.read_excel(archivo, header=None)
     mejor_fila, max_coincidencias = 0, 0
-    claves = ['nombre', 'cliente', 'direcc', 'calle', 'comuna', 'fono', 'contacto']
+    claves = ['nombre', 'cliente', 'direcc', 'calle', 'comuna', 'fono', 'contacto', 'producto', 'cant']
     for i in range(min(20, len(df_crudo))):
         fila_txt = " ".join([str(x).lower() for x in df_crudo.iloc[i].values if pd.notna(x)])
         coincidencias = sum(1 for p in claves if p in fila_txt)
@@ -63,20 +57,52 @@ def limpiar_dato(valor):
     return None if texto.lower() in ["nan", "", "none"] else texto
 
 def validar_direccion(entrada):
-    """Lógica estricta de validación (Igual a tu .py)"""
     try:
         res = gmaps.geocode(f"{entrada}, Santiago, Chile")
         if res:
             tipos = res[0].get('types', [])
-            # Solo acepta si es una dirección exacta o recinto
             if 'street_address' not in tipos and 'premise' not in tipos and 'subpremise' not in tipos:
-                return None, None
+                return None, False
             return res[0]['formatted_address'], True
         return None, False
     except: return None, False
 
+def obtener_matriz_tiempos_completa(direcciones):
+    n = len(direcciones)
+    matriz = [[0 for _ in range(n)] for _ in range(n)]
+    for i in range(0, n, 10):
+        for j in range(0, n, 10):
+            try:
+                res = gmaps.distance_matrix(direcciones[i:i+10], direcciones[j:j+10], mode='driving')
+                for f_idx, fila in enumerate(res['rows']):
+                    for c_idx, elem in enumerate(fila['elements']):
+                        matriz[i+f_idx][j+c_idx] = elem['duration']['value'] if elem['status'] == 'OK' else 999999
+            except:
+                pass 
+    return matriz
+
+def optimizar_con_ortools(matriz):
+    n = len(matriz)
+    manager = pywrapcp.RoutingIndexManager(n, 1, [0], [n - 1])
+    routing = pywrapcp.RoutingModel(manager)
+    def cb(f, t): return matriz[manager.IndexToNode(f)][manager.IndexToNode(t)]
+    idx_cb = routing.RegisterTransitCallback(cb)
+    routing.SetArcCostEvaluatorOfAllVehicles(idx_cb)
+    params = pywrapcp.DefaultRoutingSearchParameters()
+    params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+    solucion = routing.SolveWithParameters(params)
+    if solucion:
+        ruta = []
+        idx = routing.Start(0)
+        while not routing.IsEnd(idx):
+            ruta.append(manager.IndexToNode(idx))
+            idx = solucion.Value(routing.NextVar(idx))
+        ruta.append(manager.IndexToNode(idx))
+        return ruta
+    return None
+
 # ==========================================
-# 3. GENERACIÓN DE PDF CORPORATIVO
+# 3. GENERACIÓN DE PDF Y URLs
 # ==========================================
 def generar_pdf_original(ruta, todas_dir, todos_nom, pedidos):
     buffer = io.BytesIO()
@@ -102,14 +128,12 @@ def generar_pdf_original(ruta, todas_dir, todos_nom, pedidos):
         y -= 12
         if p.get('contacto'): c.drawString(70, y, f"Tel: {p['contacto']}"); y -= 12
         
-        # Productos (Verde)
         items = [f"{v} {k}" for k, v in p.get('productos', {}).items()]
         if items:
             c.setFont("Helvetica-BoldOblique", 10); c.setFillColor(colors.darkgreen)
             c.drawString(70, y, "PRODUCTOS: " + " | ".join(items)); c.setFillColor(colors.black); y -= 15
             
-        # Efectivo (Rojo)
-        if p.get('efectivo') and str(p['efectivo']).lower() in ['si', 'sí', '1', 'true']:
+        if p.get('efectivo') and str(p['efectivo']).lower() in ['si', 'sí', '1', 'true', 'efectivo']:
             c.setFont("Helvetica-Bold", 10); c.setFillColor(colors.red)
             c.drawString(70, y, "⚠️ COBRAR EN EFECTIVO"); c.setFillColor(colors.black); y -= 15
             
@@ -117,6 +141,11 @@ def generar_pdf_original(ruta, todas_dir, todos_nom, pedidos):
     c.save()
     buffer.seek(0)
     return buffer
+
+def generar_url_maps(tramo_indices, todas_dir):
+    base_url = "https://www.google.com/maps/dir/"
+    puntos = [urllib.parse.quote(todas_dir[idx]) for idx in tramo_indices]
+    return base_url + "/".join(puntos)
 
 # ==========================================
 # 4. INTERFAZ WEB Y FLUJO DE VALIDACIÓN
@@ -129,7 +158,6 @@ if archivo:
     df = leer_excel_robusto(archivo)
     cols_ex = ["-- No aplica --"] + list(df.columns)
     
-    # Mapeador Dinámico
     st.subheader("🔗 Configuración de Columnas")
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -142,7 +170,6 @@ if archivo:
         m_depto = st.selectbox("Depto/Casa", cols_ex)
         m_efec = st.selectbox("Pago Efectivo", cols_ex)
 
-    # Productos dinámicos
     if 'campos' not in st.session_state: st.session_state.campos = []
     if st.button("+ Agregar Producto"): st.session_state.campos.append(len(st.session_state.campos))
     
@@ -155,26 +182,22 @@ if archivo:
 
     st.divider()
 
-    # --- PASO 1: VALIDACIÓN DE DIRECCIONES (El reemplazo del Popup) ---
     if st.button("🔍 Validar Direcciones y Datos", type="primary", use_container_width=True):
         st.session_state.listos = []
         st.session_state.errores = []
         
         with st.spinner("Validando con Google Maps..."):
             for _, fila in df.iterrows():
-                # Filtro de Totales/Resúmenes
                 nom_c = limpiar_dato(fila[m_nom]) if m_nom != "-- No aplica --" else None
                 if nom_c and any(x in str(nom_c).lower() for x in ['total', 'subtotal', 'resumen']): continue
                 
                 calle = limpiar_dato(fila[m_dir])
                 comuna = limpiar_dato(fila[m_com])
-                
                 if not calle or not comuna: continue
                 
                 full_dir = f"{calle}, {comuna}"
                 validada, es_exacta = validar_direccion(full_dir)
                 
-                # Extracción de productos (Filtro anti-ceros)
                 prods = {}
                 for p in mapa_p:
                     v = limpiar_dato(fila[p['c']])
@@ -195,7 +218,6 @@ if archivo:
                 else:
                     st.session_state.errores.append(datos_cliente)
 
-    # Mostrar Errores para corrección manual (FUNCIONALIDAD POPUP)
     if 'errores' in st.session_state and st.session_state.errores:
         st.error(f"⚠️ Se encontraron {len(st.session_state.errores)} direcciones dudosas. Por favor, corrígelas:")
         for i, err in enumerate(st.session_state.errores):
@@ -208,45 +230,38 @@ if archivo:
                     st.session_state.errores.pop(i)
                     st.rerun()
 
-    # --- PASO 2: OPTIMIZACIÓN FINAL ---
-    # --- PASO 2: OPTIMIZACIÓN FINAL ---
     if 'listos' in st.session_state and st.session_state.listos and not st.session_state.errores:
         st.success(f"✅ {len(st.session_state.listos)} direcciones listas para optimizar.")
         
         if st.button("🚀 CALCULAR RUTA ÓPTIMA", use_container_width=True):
             with st.spinner("Construyendo matriz de tráfico y calculando con IA..."):
-                # 1. Recuperar los datos ya validados de la memoria
                 dir_ex = [d['dir_validada'] for d in st.session_state.listos]
                 nom_ex = [d['nombre'] for d in st.session_state.listos]
                 ped_ex = [{'contacto': d['contacto'], 'depto': d['depto'], 'efectivo': d['efectivo'], 'productos': d['productos']} for d in st.session_state.listos]
 
-                # 2. Validar las direcciones de bodega (Inicio y Fin)
                 ini_val, _ = validar_direccion(dir_inicio)
                 fin_val, _ = validar_direccion(dir_fin)
                 
-                # Armado de listas finales
                 todas_dir = [ini_val if ini_val else dir_inicio] + dir_ex + [fin_val if fin_val else dir_fin]
                 todos_nom = ["INICIO BODEGA"] + nom_ex + ["FIN TURNO"]
                 pedidos_full = [{}] + ped_ex + [{}]
                 
-                # 3. Motor OR-Tools
-                matriz = obtener_matriz_tiempos(todas_dir)
+                # ¡AQUÍ ESTABA TU ERROR DE NOMBRE EN EL ÚLTIMO PARCHE! Ahora está 100% coordinado.
+                matriz = obtener_matriz_tiempos_completa(todas_dir)
                 
                 if matriz:
-                    ruta = optimizar_ortools(matriz)
+                    ruta = optimizar_con_ortools(matriz)
                     
                     if ruta:
                         st.success("¡Ruta calculada con éxito!")
                         st.balloons()
                         
-                        # 4. Generar y mostrar PDF
                         pdf_file = generar_pdf_original(ruta, todas_dir, todos_nom, pedidos_full)
                         st.download_button("📄 Descargar Hoja de Ruta (PDF)", pdf_file, "Hoja_Ruta.pdf", "application/pdf")
                         
                         st.divider()
                         st.subheader("🗺️ Navegación por Tramos (Google Maps)")
                         
-                        # 5. Generar Botones de Google Maps
                         tramos_cols = st.columns(3)
                         for i in range(0, len(ruta) - 1, 9):
                             tramo = ruta[i : i + 10]
@@ -257,7 +272,6 @@ if archivo:
                         st.divider()
                         st.subheader("Detalle de Paradas")
                         
-                        # 6. Tarjetas Visuales tipo App de Escritorio
                         for i, idx in enumerate(ruta):
                             with st.expander(f"Parada {i} - {todos_nom[idx]}", expanded=(i==1)):
                                 st.write(f"📍 **Dirección:** {todas_dir[idx]}")
@@ -271,4 +285,4 @@ if archivo:
                                 if info.get('efectivo') and str(info['efectivo']).lower() in ['si', 'sí', '1', 'true', 'efectivo']:
                                     st.error("⚠️ PAGO EN EFECTIVO PENDIENTE")
                 else:
-                    st.error("❌ Error al contactar con los satélites de tráfico (Distance Matrix).")
+                    st.error("❌ Error al contactar con Google Maps (Distance Matrix).")
