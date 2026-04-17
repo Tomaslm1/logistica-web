@@ -39,6 +39,11 @@ with st.sidebar:
 # 2. FUNCIONES DE INGENIERÍA (PORTADAS 1:1)
 # ==========================================
 
+def generar_url_maps(tramo_indices, todas_dir):
+    base_url = "https://www.google.com/maps/dir/"
+    puntos = [urllib.parse.quote(todas_dir[idx]) for idx in tramo_indices]
+    return base_url + "/".join(puntos)
+
 def leer_excel_robusto(archivo):
     df_crudo = pd.read_excel(archivo, header=None)
     mejor_fila, max_coincidencias = 0, 0
@@ -204,10 +209,66 @@ if archivo:
                     st.rerun()
 
     # --- PASO 2: OPTIMIZACIÓN FINAL ---
+    # --- PASO 2: OPTIMIZACIÓN FINAL ---
     if 'listos' in st.session_state and st.session_state.listos and not st.session_state.errores:
         st.success(f"✅ {len(st.session_state.listos)} direcciones listas para optimizar.")
         
         if st.button("🚀 CALCULAR RUTA ÓPTIMA", use_container_width=True):
-            # Aquí va el motor de OR-Tools que ya tienes
-            # ... (obtener matriz, llamar motor, generar PDF, mostrar botones de tramos)
-            st.balloons()
+            with st.spinner("Construyendo matriz de tráfico y calculando con IA..."):
+                # 1. Recuperar los datos ya validados de la memoria
+                dir_ex = [d['dir_validada'] for d in st.session_state.listos]
+                nom_ex = [d['nombre'] for d in st.session_state.listos]
+                ped_ex = [{'contacto': d['contacto'], 'depto': d['depto'], 'efectivo': d['efectivo'], 'productos': d['productos']} for d in st.session_state.listos]
+
+                # 2. Validar las direcciones de bodega (Inicio y Fin)
+                ini_val, _ = validar_direccion(dir_inicio)
+                fin_val, _ = validar_direccion(dir_fin)
+                
+                # Armado de listas finales
+                todas_dir = [ini_val if ini_val else dir_inicio] + dir_ex + [fin_val if fin_val else dir_fin]
+                todos_nom = ["INICIO BODEGA"] + nom_ex + ["FIN TURNO"]
+                pedidos_full = [{}] + ped_ex + [{}]
+                
+                # 3. Motor OR-Tools
+                matriz = obtener_matriz_tiempos(todas_dir)
+                
+                if matriz:
+                    ruta = optimizar_ortools(matriz)
+                    
+                    if ruta:
+                        st.success("¡Ruta calculada con éxito!")
+                        st.balloons()
+                        
+                        # 4. Generar y mostrar PDF
+                        pdf_file = generar_pdf_original(ruta, todas_dir, todos_nom, pedidos_full)
+                        st.download_button("📄 Descargar Hoja de Ruta (PDF)", pdf_file, "Hoja_Ruta.pdf", "application/pdf")
+                        
+                        st.divider()
+                        st.subheader("🗺️ Navegación por Tramos (Google Maps)")
+                        
+                        # 5. Generar Botones de Google Maps
+                        tramos_cols = st.columns(3)
+                        for i in range(0, len(ruta) - 1, 9):
+                            tramo = ruta[i : i + 10]
+                            url_maps = generar_url_maps(tramo, todas_dir)
+                            num_tramo = i // 9 + 1
+                            tramos_cols[(num_tramo - 1) % 3].link_button(f"🚙 Navegar Tramo {num_tramo}", url_maps, use_container_width=True)
+
+                        st.divider()
+                        st.subheader("Detalle de Paradas")
+                        
+                        # 6. Tarjetas Visuales tipo App de Escritorio
+                        for i, idx in enumerate(ruta):
+                            with st.expander(f"Parada {i} - {todos_nom[idx]}", expanded=(i==1)):
+                                st.write(f"📍 **Dirección:** {todas_dir[idx]}")
+                                info = pedidos_full[idx]
+                                if info.get('depto'): st.write(f"🏢 **Depto/Casa:** {info['depto']}")
+                                if info.get('contacto'): st.write(f"📞 **Contacto:** {info['contacto']}")
+                                if info.get('productos'):
+                                    st.markdown("📦 **Productos a entregar:**")
+                                    for k, v in info['productos'].items():
+                                        st.success(f"{v} {k}")
+                                if info.get('efectivo') and str(info['efectivo']).lower() in ['si', 'sí', '1', 'true', 'efectivo']:
+                                    st.error("⚠️ PAGO EN EFECTIVO PENDIENTE")
+                else:
+                    st.error("❌ Error al contactar con los satélites de tráfico (Distance Matrix).")
