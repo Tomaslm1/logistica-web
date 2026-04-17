@@ -4,6 +4,7 @@ import googlemaps
 from datetime import datetime
 import io
 import urllib.parse
+import uuid  # NUEVO: Para crear IDs únicos y evitar que los textos se mezclen
 from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
 from reportlab.lib.pagesizes import letter
@@ -204,6 +205,7 @@ if archivo:
                     if v and str(v) not in ["0", "0.0", "0,0"]: prods[p['n']] = v
 
                 datos_cliente = {
+                    'id': str(uuid.uuid4()),  # <--- ESTO SOLUCIONA EL BUG DE LAS CAJAS DE TEXTO
                     'nombre': str(nom_c) if nom_c else "Cliente",
                     'dir_original': full_dir,
                     'dir_validada': validada,
@@ -218,17 +220,31 @@ if archivo:
                 else:
                     st.session_state.errores.append(datos_cliente)
 
+    # --- PANTALLA DE CORRECCIÓN (SABUESO ANTI-BUGS) ---
     if 'errores' in st.session_state and st.session_state.errores:
         st.error(f"⚠️ Se encontraron {len(st.session_state.errores)} direcciones dudosas. Por favor, corrígelas:")
-        for i, err in enumerate(st.session_state.errores):
-            new_val = st.text_input(f"Corregir para: {err['nombre']}", value=err['dir_original'], key=f"err{i}")
-            if st.button(f"Validar Corrección {i}"):
-                v, exact = validar_direccion(new_val)
-                if v and exact:
-                    err['dir_validada'] = v
-                    st.session_state.listos.append(err)
-                    st.session_state.errores.pop(i)
-                    st.rerun()
+        
+        # Usamos una copia de la lista para iterar seguros
+        for err in list(st.session_state.errores):
+            cols_err = st.columns([4, 1])
+            with cols_err[0]:
+                # Usamos el ID único de este error específico para la llave, así Streamlit nunca los mezcla
+                new_val = st.text_input(f"Corregir para: {err['nombre']}", value=err['dir_original'], key=f"input_{err['id']}")
+            with cols_err[1]:
+                st.write("") # Espacio para alinear el botón
+                st.write("")
+                if st.button("Validar", key=f"btn_{err['id']}"):
+                    v, exact = validar_direccion(new_val)
+                    if v and exact:
+                        err['dir_validada'] = v
+                        # Encontramos el error en la lista original y lo sacamos
+                        idx = next((index for (index, d) in enumerate(st.session_state.errores) if d["id"] == err["id"]), None)
+                        if idx is not None:
+                            st.session_state.listos.append(err)
+                            st.session_state.errores.pop(idx)
+                            st.rerun()
+                    else:
+                        st.error("Sigue ambigua.")
 
     if 'listos' in st.session_state and st.session_state.listos and not st.session_state.errores:
         st.success(f"✅ {len(st.session_state.listos)} direcciones listas para optimizar.")
@@ -246,7 +262,6 @@ if archivo:
                 todos_nom = ["INICIO BODEGA"] + nom_ex + ["FIN TURNO"]
                 pedidos_full = [{}] + ped_ex + [{}]
                 
-                # ¡AQUÍ ESTABA TU ERROR DE NOMBRE EN EL ÚLTIMO PARCHE! Ahora está 100% coordinado.
                 matriz = obtener_matriz_tiempos_completa(todas_dir)
                 
                 if matriz:
@@ -254,7 +269,7 @@ if archivo:
                     
                     if ruta:
                         st.success("¡Ruta calculada con éxito!")
-                        st.balloons()
+                        # GLOBOS ELIMINADOS
                         
                         pdf_file = generar_pdf_original(ruta, todas_dir, todos_nom, pedidos_full)
                         st.download_button("📄 Descargar Hoja de Ruta (PDF)", pdf_file, "Hoja_Ruta.pdf", "application/pdf")
