@@ -146,9 +146,17 @@ def generar_pdf_original(ruta, todas_dir, todos_nom, pedidos):
         tipo = f"PARADA #{i}" if (0 < i < len(ruta)-1) else "PUNTO DE CONTROL"
         c.drawString(50, y, f"{tipo}: {todos_nom[idx]}")
         y -= 15
+        
         c.setFont("Helvetica", 10)
-        c.drawString(70, y, f"Dirección: {todas_dir[idx]}")
+        
+        # --- SOLUCIÓN: Agregamos el Depto a la dirección del PDF ---
+        direccion_str = todas_dir[idx]
+        if p.get('depto'): 
+            direccion_str += f" (Depto: {p['depto']})"
+            
+        c.drawString(70, y, f"Dirección: {direccion_str}")
         y -= 12
+        
         if p.get('contacto'): c.drawString(70, y, f"Tel: {p['contacto']}"); y -= 12
         
         items = [f"{v} {k}" for k, v in p.get('productos', {}).items()]
