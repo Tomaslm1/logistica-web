@@ -14,7 +14,7 @@ from reportlab.lib import colors
 # ==========================================
 # 1. CONFIGURACIÓN Y SEGURIDAD
 # ==========================================
-st.set_page_config(page_title="Sistema Logístico Universal", layout="wide")
+st.set_page_config(page_title="Sistema Logístico", layout="wide")
 
 try:
     API_KEY = st.secrets["GOOGLE_API_KEY"]
@@ -168,7 +168,7 @@ def generar_url_maps(tramo_indices, todas_dir):
 # ==========================================
 # 4. INTERFAZ WEB Y FLUJO DE VALIDACIÓN
 # ==========================================
-st.title("🚚 Sistema Logístico Pro (Web)")
+st.title("🚚 Sistema Logístico")
 
 archivo = st.file_uploader("Sube tu Excel", type=["xlsx"])
 
