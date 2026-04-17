@@ -186,20 +186,28 @@ st.title("🚚 Sistema Logístico")
 archivo = st.file_uploader("Sube tu Excel", type=["xlsx"])
 
 if archivo:
-    df = leer_excel_robusto(archivo)
-    cols_ex = ["-- No aplica --"] + list(df.columns)
-    
-    st.subheader("🔗 Configuración de Columnas")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        m_dir = st.selectbox("Dirección *", cols_ex, index=1 if len(cols_ex)>1 else 0)
-        m_nom = st.selectbox("Nombre Cliente", cols_ex)
-    with c2:
-        m_com = st.selectbox("Comuna *", cols_ex, index=2 if len(cols_ex)>2 else 0)
-        m_cont = st.selectbox("Teléfono", cols_ex)
-    with c3:
-        m_depto = st.selectbox("Depto/Casa", cols_ex)
-        m_efec = st.selectbox("Pago Efectivo", cols_ex)
+        df = leer_excel_robusto(archivo)
+        cols_ex = ["-- No aplica --"] + list(df.columns)
+        
+        # --- EL CEREBRO PREDICTIVO DE COLUMNAS ---
+        def adivinar_indice(opciones, palabras):
+            for i, opc in enumerate(opciones):
+                # Si alguna de las palabras clave está en el nombre de la columna (en minúsculas), devuelve su posición
+                if any(p in str(opc).lower() for p in palabras):
+                    return i
+            return 0 # Si no encuentra nada, devuelve 0 ("-- No aplica --")
+
+        st.subheader("🔗 Configuración de Columnas")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            m_dir = st.selectbox("Dirección *", cols_ex, index=adivinar_indice(cols_ex, ["direcc", "calle"]))
+            m_nom = st.selectbox("Nombre Cliente", cols_ex, index=adivinar_indice(cols_ex, ["nombre", "cliente"]))
+        with c2:
+            m_com = st.selectbox("Comuna *", cols_ex, index=adivinar_indice(cols_ex, ["comuna", "ciudad", "sector"]))
+            m_cont = st.selectbox("Teléfono", cols_ex, index=adivinar_indice(cols_ex, ["fono", "tel", "contac"]))
+        with c3:
+            m_depto = st.selectbox("Depto/Casa", cols_ex, index=adivinar_indice(cols_ex, ["depto", "dpto", "casa", "num"]))
+            m_efec = st.selectbox("Pago Efectivo", cols_ex, index=adivinar_indice(cols_ex, ["pago", "efectivo", "cobro", "observ"]))
 
     if 'campos' not in st.session_state: st.session_state.campos = []
     if st.button("+ Agregar Producto"): st.session_state.campos.append(len(st.session_state.campos))
