@@ -54,9 +54,26 @@ def leer_excel_robusto(archivo):
 
 def limpiar_dato(valor):
     if pd.isna(valor): return None
+    # EL ESCUDO ANTI-DECIMALES: Si es un número, le quita el .0 antes de hacerlo texto
+    if isinstance(valor, (int, float)):
+        return str(int(valor)) if valor == int(valor) else str(valor)
     texto = str(valor).strip()
     return None if texto.lower() in ["nan", "", "none"] else texto
 
+def formatear_telefono(numero):
+    """Convierte cualquier número desordenado en un formato limpio y profesional"""
+    if not numero: return None
+    # Quitamos espacios, guiones o cualquier texto, dejando solo números
+    num = "".join(c for c in str(numero) if c.isdigit())
+    
+    # Formateo visual (Ajustado para Chile)
+    if len(num) == 11 and num.startswith("56"): 
+        return f"+{num[:2]} {num[2]} {num[3:7]} {num[7:]}"
+    elif len(num) == 8: 
+        return f"+56 9 {num[:4]} {num[4:]}"
+    elif len(num) == 9 and num.startswith("9"): 
+        return f"+56 {num[:1]} {num[1:5]} {num[5:]}"
+    return f"+{num}" if num else None
 def validar_direccion(entrada):
     try:
         res = gmaps.geocode(f"{entrada}, Santiago, Chile")
@@ -209,7 +226,7 @@ if archivo:
                     'nombre': str(nom_c) if nom_c else "Cliente",
                     'dir_original': full_dir,
                     'dir_validada': validada,
-                    'contacto': limpiar_dato(fila[m_cont]) if m_cont != "-- No aplica --" else None,
+                    'contacto': formatear_telefono(limpiar_dato(fila[m_cont])) if m_cont != "-- No aplica --" else None,
                     'depto': limpiar_dato(fila[m_depto]) if m_depto != "-- No aplica --" else None,
                     'efectivo': fila[m_efec] if m_efec != "-- No aplica --" else None,
                     'productos': prods
