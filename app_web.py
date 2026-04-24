@@ -184,7 +184,7 @@ def generar_url_maps(tramo_indices, todas_dir):
 # ==========================================
 # 4. INTERFAZ WEB Y FLUJO DE VALIDACIÓN
 # ==========================================
-st.title("🚚 Sistema Logístico Pro (Web)")
+st.title("🚚 Sistema Logístico")
 
 archivo = st.file_uploader("Sube tu Excel", type=["xlsx"])
 
